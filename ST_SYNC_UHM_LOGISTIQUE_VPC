@@ -1,0 +1,315 @@
+AS 
+/* 
+****************** DOCUMENTATION TEMPLATE ******************** 
+-- DID AUTHOR: ERICK VAN HOOREN 
+-- DID CREATIONDATE: 2022-09-09
+-- DID VERSION: 1.0.0  
+-- DID DESCRIPTION:  
+-- DID BUSINESSRULES: EVERY DAY  
+-- DID LASTMODIFIEDBY:  PENELOPE CASSIN 2023-06-15
+******************* DOCUMENTATION TEMPLATE ********************  
+*/ 
+
+
+DECLARE @TASK NVARCHAR(50) = 'ST_SYNC_UHM_LOGISTIQUE_VPC'; 
+
+
+BEGIN 
+SET NOCOUNT ON; 
+BEGIN TRY 
+ 
+
+
+-- ------------------ INIT -------------------- --  
+-- TASK DETAILS TABLE 
+IF OBJECT_ID('DBO.CFG_SYNCDETAILS', 'U') IS NULL 
+BEGIN; 
+  
+    CREATE TABLE DBO.CFG_SYNCDETAILS ( 
+        TASK NVARCHAR(50) NOT NULL CONSTRAINT PK_CFG_SYNCDETAILS PRIMARY KEY 
+        , LAST_RUNDT DATETIME NULL 
+        , LAST_SUCCESSDT DATETIME NULL 
+        , LAST_RUNTIME NVARCHAR(8) NULL 
+        , ERRORMSG NVARCHAR(MAX) NULL 
+        , AQID BIGINT 
+        , FGID BIGINT 
+        , MTAID BIGINT 
+    ); 
+END; 
+-- ------------------ LOGS -------------------- --  
+IF EXISTS (SELECT 1 FROM DBO.CFG_SYNCDETAILS WHERE TASK = @TASK) 
+BEGIN; 
+    UPDATE DBO.CFG_SYNCDETAILS SET LAST_RUNDT = GETDATE(), ERRORMSG = NULL WHERE TASK = @TASK; 
+END; 
+ELSE 
+BEGIN; 
+    INSERT INTO DBO.CFG_SYNCDETAILS (TASK, LAST_RUNDT) VALUES (@TASK, GETDATE()); 
+END; 
+  
+  
+-- ------------------ PK & IDX ------------------ -- 
+  
+  
+IF NOT EXISTS (SELECT 1 FROM SYS.INDEXES AS I WITH(NOLOCK) WHERE I.NAME = 'IDX_MATCH_NUM_LOGISTIQUE_VPC' AND OBJECT_ID = OBJECT_ID('DBO.SYNC_UHM_LOGISTIQUE_VPC', 'U')) 
+BEGIN; 
+    CREATE NONCLUSTERED INDEX IDX_MATCH ON [DBO].[SYNC_UHM_LOGISTIQUE_VPC] ([NUM_LOGISTIQUE_VPC]) /* INCLUDE ([X]) */ ; 
+END;  
+
+  
+-- ------------------ REJECT MNGT ------------------ -- 
+  
+  
+-- EMPTY BUSINESS KEY 
+UPDATE TGT SET 
+      TGT.OPTI_REJECTED        = 2 
+    , TGT.OPTI_REJECTED_REASON = 'NUM_LOGISTIQUE_VPC' 
+FROM DBO.SYNC_UHM_LOGISTIQUE_VPC AS TGT 
+WHERE (TGT.OPTI_REJECTED = 0  
+OR TGT.OPTI_REJECTED IS NULL) 
+AND (TGT.NUM_LOGISTIQUE_VPC IS NULL  
+OR TGT.NUM_LOGISTIQUE_VPC = '')
+;  
+  
+  
+-- ------------------ MATCH TABLE ------------------ -- 
+  
+  
+-- CHECK 
+IF OBJECT_ID('DBO.TMP_MATCH_KEY', 'U') IS NOT NULL 
+BEGIN; 
+    DROP TABLE DBO.TMP_MATCH_KEY; 
+END; 
+  
+-- CREATE 
+CREATE TABLE DBO.TMP_MATCH_KEY( 
+      SYNCID INT NOT NULL 
+    , USERID INT NOT NULL 
+    , PRIMARY KEY (SYNCID, USERID) 
+); 
+  
+-- FILL NUM_LOGISTIQUE_VPC
+INSERT INTO DBO.TMP_MATCH_KEY 
+    ( SYNCID 
+    , USERID ) 
+SELECT     
+      SRC.ID AS SYNCID 
+    , USR.ID AS USERID 
+FROM DBO.SYNC_UHM_LOGISTIQUE_VPC AS SRC WITH(NOLOCK)  
+    INNER JOIN dbo.USERS_UHM_CONTACTS AS USR WITH(NOLOCK) 
+        ON SRC.NUM_CONTACT = USR.NUM_CONTACT
+WHERE (SRC.OPTI_REJECTED = 0  
+OR SRC.OPTI_REJECTED IS NULL)
+; 
+
+  
+-- ------------------ UPSERT ------------------ -- 
+  
+  
+-- UPDATE FIRST... 
+UPDATE TGT SET 
+        -- NEVER UPDATE BUSINESS KEY 
+          TGT.MODIFIED_DT                   	= GETDATE() 
+        , TGT.NUM_LOGISTIQUE_VPC        		= SRC.NUM_LOGISTIQUE_VPC                
+        , TGT.NUM_COMMANDE          			= SRC.NUM_COMMANDE                      
+        , TGT.NUM_CONTACT           			= SRC.NUM_CONTACT                       
+        , TGT.SOCIETE               			= SRC.SOCIETE                           
+        , TGT.TITRE                         	= SRC.TITRE                             
+        , TGT.NUM_PRODUIT           			= SRC.NUM_PRODUIT                       
+        , TGT.DATE_CREATION         			= SRC.DATE_CREATION                     
+        , TGT.OPERATEUR_CREATION        		= SRC.OPERATEUR_CREATION                
+        , TGT.DATE_DERNIERE_MODIFICATION    	= SRC.DATE_DERNIERE_MODIFICATION        
+        , TGT.OPERATEUR_MODIFICATION            = SRC.OPERATEUR_MODIFICATION            
+        , TGT.CODE_OPERATION_EDITEUR            = SRC.CODE_OPERATION_EDITEUR            
+        , TGT.CODE_REF_CO                       = SRC.CODE_REF_CO                       
+        , TGT.CODE_ARTICLE                      = SRC.CODE_ARTICLE                      
+        , TGT.LIBELLE_ARTICLE                   = SRC.LIBELLE_ARTICLE                   
+        , TGT.DESCRIPTION_ARTICLE               = SRC.DESCRIPTION_ARTICLE               
+        , TGT.QUANTITE                          = SRC.QUANTITE                          
+        , TGT.TOP_REMPLACE                      = SRC.TOP_REMPLACE                      
+        , TGT.CODE_FAMILLE                      = SRC.CODE_FAMILLE                      
+        , TGT.CODE_SOUS_FAMILLE                 = SRC.CODE_SOUS_FAMILLE                 
+        , TGT.CODE_REGLEMENT                    = SRC.CODE_REGLEMENT                    
+        , TGT.CODE_VENTILATION                  = SRC.CODE_VENTILATION                  
+        , TGT.CODE_SITUATION                    = SRC.CODE_SITUATION                    
+        , TGT.IDENTIFIANT_TARIFS                = SRC.IDENTIFIANT_TARIFS                
+        , TGT.MONTANT_PRODUIT_TTC               = SRC.MONTANT_PRODUIT_TTC               
+        , TGT.CODE_ACHEMINEMENT                 = SRC.CODE_ACHEMINEMENT                 
+        , TGT.MONTANT_ACHEMINEMENT_PRODUIT_TTC  = SRC.MONTANT_ACHEMINEMENT_PRODUIT_TTC  
+        , TGT.TX_REMISE_PRODUIT                 = SRC.TX_REMISE_PRODUIT                 
+        , TGT.MONTANT_REMISE_PRODUIT            = SRC.MONTANT_REMISE_PRODUIT            
+        , TGT.MONTANT_REMISE_SUPP_PRODUIT       = SRC.MONTANT_REMISE_SUPP_PRODUIT       
+        , TGT.MONTANT_TOTAL_DU_PRODUIT_TTC      = SRC.MONTANT_TOTAL_DU_PRODUIT_TTC      
+        , TGT.TOP_LOGISTIQUE_PRIME              = SRC.TOP_LOGISTIQUE_PRIME              
+        , TGT.CODE_EXPEDITION                   = SRC.CODE_EXPEDITION                   
+        , TGT.STATUT_EXPEDITION                 = SRC.STATUT_EXPEDITION                 
+        , TGT.DATE_PREPARATION                  = SRC.DATE_PREPARATION                  
+        , TGT.DATE_EXPEDITION                   = SRC.DATE_EXPEDITION                   
+        , TGT.ID_SUIVI_EXPEDITION               = SRC.ID_SUIVI_EXPEDITION               
+        , TGT.CODE_MOTIF_ANNULATION             = SRC.CODE_MOTIF_ANNULATION             
+        , TGT.DATE_ANNULATION                   = SRC.DATE_ANNULATION                   
+        , TGT.CODE_FAMILLE_SELECTION            = SRC.CODE_FAMILLE_SELECTION            
+        , TGT.ECHEANCE_CB                       = SRC.ECHEANCE_CB                       
+        , TGT.DATE_DERNIER_REGLEMENT        	= SRC.DATE_DERNIER_REGLEMENT  
+        , TGT.STATUT                            = SRC.STATUT           
+FROM DBO.DATA_UHM_LOGISTIQUE_VPC AS TGT 
+    INNER JOIN DBO.TMP_MATCH_KEY AS MAT WITH(NOLOCK) 
+        ON MAT.USERID = TGT.ID 
+    INNER JOIN DBO.SYNC_UHM_LOGISTIQUE_VPC AS SRC WITH(NOLOCK) 
+        ON SRC.ID = MAT.SYNCID 
+    
+
+  
+-- ... THEN INSERT 
+INSERT INTO DBO.DATA_UHM_LOGISTIQUE_VPC  
+    ( CREATED_DT 
+    , MODIFIED_DT
+	, USERID
+    , NUM_LOGISTIQUE_VPC                
+    , NUM_COMMANDE                      
+    , NUM_CONTACT                       
+    , SOCIETE                           
+    , TITRE                             
+    , NUM_PRODUIT                       
+    , DATE_CREATION                     
+    , OPERATEUR_CREATION                
+    , DATE_DERNIERE_MODIFICATION        
+    , OPERATEUR_MODIFICATION            
+    , CODE_OPERATION_EDITEUR            
+    , CODE_REF_CO                       
+    , CODE_ARTICLE                      
+    , LIBELLE_ARTICLE                   
+    , DESCRIPTION_ARTICLE               
+    , QUANTITE                          
+    , TOP_REMPLACE                      
+    , CODE_FAMILLE                      
+    , CODE_SOUS_FAMILLE                 
+    , CODE_REGLEMENT                    
+    , CODE_VENTILATION                  
+    , CODE_SITUATION                    
+    , IDENTIFIANT_TARIFS                
+    , MONTANT_PRODUIT_TTC               
+    , CODE_ACHEMINEMENT                 
+    , MONTANT_ACHEMINEMENT_PRODUIT_TTC  
+    , TX_REMISE_PRODUIT                 
+    , MONTANT_REMISE_PRODUIT            
+    , MONTANT_REMISE_SUPP_PRODUIT       
+    , MONTANT_TOTAL_DU_PRODUIT_TTC      
+    , TOP_LOGISTIQUE_PRIME              
+    , CODE_EXPEDITION                   
+    , STATUT_EXPEDITION                 
+    , DATE_PREPARATION                  
+    , DATE_EXPEDITION                   
+    , ID_SUIVI_EXPEDITION               
+    , CODE_MOTIF_ANNULATION             
+    , DATE_ANNULATION                   
+    , CODE_FAMILLE_SELECTION            
+    , ECHEANCE_CB                       
+    , DATE_DERNIER_REGLEMENT    
+    , STATUT        
+    ) 
+SELECT 
+      GETDATE() AS CREATED_DT 
+    , GETDATE() AS MODIFIED_DT
+	, MAT.USERID
+    , SRC.NUM_LOGISTIQUE_VPC                
+    , SRC.NUM_COMMANDE                      
+    , SRC.NUM_CONTACT                       
+    , SRC.SOCIETE                           
+    , SRC.TITRE                             
+    , SRC.NUM_PRODUIT                       
+    , SRC.DATE_CREATION                     
+    , SRC.OPERATEUR_CREATION                
+    , SRC.DATE_DERNIERE_MODIFICATION        
+    , SRC.OPERATEUR_MODIFICATION            
+    , SRC.CODE_OPERATION_EDITEUR            
+    , SRC.CODE_REF_CO                       
+    , SRC.CODE_ARTICLE                      
+    , SRC.LIBELLE_ARTICLE                   
+    , SRC.DESCRIPTION_ARTICLE               
+    , SRC.QUANTITE                          
+    , SRC.TOP_REMPLACE                      
+    , SRC.CODE_FAMILLE                      
+    , SRC.CODE_SOUS_FAMILLE                 
+    , SRC.CODE_REGLEMENT                    
+    , SRC.CODE_VENTILATION                  
+    , SRC.CODE_SITUATION                    
+    , SRC.IDENTIFIANT_TARIFS                
+    , SRC.MONTANT_PRODUIT_TTC               
+    , SRC.CODE_ACHEMINEMENT                 
+    , SRC.MONTANT_ACHEMINEMENT_PRODUIT_TTC  
+    , SRC.TX_REMISE_PRODUIT                 
+    , SRC.MONTANT_REMISE_PRODUIT            
+    , SRC.MONTANT_REMISE_SUPP_PRODUIT       
+    , SRC.MONTANT_TOTAL_DU_PRODUIT_TTC      
+    , SRC.TOP_LOGISTIQUE_PRIME              
+    , SRC.CODE_EXPEDITION                   
+    , SRC.STATUT_EXPEDITION                 
+    , SRC.DATE_PREPARATION                  
+    , SRC.DATE_EXPEDITION                   
+    , SRC.ID_SUIVI_EXPEDITION               
+    , SRC.CODE_MOTIF_ANNULATION             
+    , SRC.DATE_ANNULATION                   
+    , SRC.CODE_FAMILLE_SELECTION            
+    , SRC.ECHEANCE_CB                       
+    , SRC.DATE_DERNIER_REGLEMENT  
+    , SRC.STATUT          
+FROM DBO.SYNC_UHM_LOGISTIQUE_VPC AS SRC WITH(NOLOCK) 
+    INNER JOIN DBO.TMP_MATCH_KEY AS MAT WITH(NOLOCK)
+        ON MAT.SYNCID = SRC.ID
+WHERE  (SRC.OPTI_REJECTED = 0
+OR SRC.OPTI_REJECTED IS NULL)
+AND NOT EXISTS (
+    SELECT 1
+    FROM DBO.DATA_UHM_LOGISTIQUE_VPC AS CHK WITH(NOLOCK)
+    WHERE CHK.USERID = MAT.USERID
+    AND CHK.NUM_LOGISTIQUE_VPC = SRC.NUM_LOGISTIQUE_VPC
+);
+
+
+-- ------------------ CLEAN UP -------------------- -- 
+  
+  
+IF OBJECT_ID('DBO.TMP_MATCH_KEY', 'U') IS NOT NULL 
+BEGIN; 
+    DROP TABLE DBO.TMP_MATCH_KEY; 
+END; 
+  
+  
+-- ------------------ END LOGS ------------------ -- 
+  
+  
+UPDATE DBO.CFG_SYNCDETAILS SET 
+    LAST_RUNTIME = CONVERT(NVARCHAR(8), GETDATE() - LAST_RUNDT, 114) 
+    , LAST_SUCCESSDT = GETDATE() 
+WHERE TASK = @TASK; 
+  
+  
+END TRY 
+  
+  
+-- ------------------ CATCH IF ERROR -------------------- -- 
+  
+  
+BEGIN CATCH 
+    -- DECLARATION - ERROR PART 
+    DECLARE @ERRORMESSAGE NVARCHAR(4000);   
+    DECLARE @ERRORSEVERITY INT;   
+    DECLARE @ERRORSTATE INT; 
+    -- INIT - ERROR PART 
+    SET @ERRORMESSAGE = CONVERT(NVARCHAR(50), ERROR_LINE()) + ' : ' + ERROR_MESSAGE();   
+    SET @ERRORSEVERITY = ERROR_SEVERITY();   
+    SET @ERRORSTATE = ERROR_STATE();   
+    -- UPDATING LOGS W/ ERROR MESSAGE 
+    UPDATE DBO.CFG_SYNCDETAILS SET  
+        ERRORMSG = CONVERT(NVARCHAR(20), GETDATE()) + ' - LIGNE ' + @ERRORMESSAGE 
+        , LAST_RUNTIME = CONVERT(NVARCHAR(8), GETDATE() - LAST_RUNDT, 114) 
+    WHERE TASK = @TASK; 
+    -- RAISING ERROR 
+    RAISERROR(@ERRORMESSAGE        -- MESSAGE TEXT.   
+            , @ERRORSEVERITY    -- SEVERITY.   
+            , @ERRORSTATE        -- STATE.   
+    ); 
+END CATCH 
+  
+  
+END
